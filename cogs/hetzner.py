@@ -13,6 +13,7 @@ from discord.ui import Button
 from settings import settings
 from typing import Literal, Optional
 from bson import ObjectId
+from bson.errors import InvalidId
 import asyncio
 import datetime
 
@@ -311,7 +312,9 @@ class Hetzner(commands.Cog, name="hetzner"):
         currency = config.get("currency", "EUR")
         if price := config.get("price"):
             vat = config.get("vat_percentage", 0)
-            parts.append(f"≤{price}{currency}" + (f"+{vat}%VAT" if vat else ""))
+            parts.append(
+                f"≤{price}{currency}" + (f" (incl. {vat}% VAT)" if vat else "")
+            )
         if loc := config.get("location"):
             parts.append(loc)
         if cpu := config.get("cpu"):
@@ -360,38 +363,54 @@ class Hetzner(commands.Cog, name="hetzner"):
             await interaction.response.send_message(
                 "All your Hetzner server configs have been removed!"
             )
-        else:                
-            del_embed = discord.Embed(
-                title="Config Removed!",
-                description=f"The following config has been removed:\n{self._config_label({'_id': config, **(await self.bot.db.hetzner.find_one({'_id': ObjectId(config)}))})}",
-                color=0xFF0000,
-            )
-                
-            result = await self.bot.db.hetzner.delete_one(
-                {"_id": ObjectId(config), "user_id": interaction.user.id}
-            )
-            if result.deleted_count == 0:
-                print(f"Config {config} not found for user {interaction.user.id}.")
+        else:
+            try:
+                oid = ObjectId(config)
+            except InvalidId:
+                print(f"Invalid ObjectId supplied for removal: {config!r} by user {interaction.user.id}")
                 await interaction.response.send_message(
-                    ":x: | Config not found!", ephemeral=True
+                    "Invalid config ID!", ephemeral=True
+                )
+                return
+
+            deleted_doc = await self.bot.db.hetzner.find_one_and_delete(
+                {"_id": oid, "user_id": interaction.user.id}
+            )
+            if deleted_doc is None:
+                print(f"Config {config} not found or not owned by user {interaction.user.id}.")
+                await interaction.response.send_message(
+                    "Config not found!", ephemeral=True
                 )
             else:
                 print(f"Removed Hetzner config {config} for user {interaction.user.id}.")
-                await interaction.response.send_message(
-                    embed = del_embed
+                del_embed = discord.Embed(
+                    title="Config Removed!",
+                    description=f"The following config has been removed:\n{self._config_label(deleted_doc)}",
+                    color=0xFF0000,
                 )
+                await interaction.response.send_message(embed=del_embed)
 
     @slash_hetzner_remove.autocomplete("config")
     async def hetzner_remove_autocomplete(
         self, interaction: Interaction, current: str
     ) -> list[Choice[str]]:
+        query = current.strip().lower()
         configs = await self.bot.db.hetzner.find(
             {"user_id": interaction.user.id}
-        ).to_list(length=10)
-        choices = [Choice(name="All configs", value="__all__")]
+        ).to_list(length=None)
+        choices = []
+
+        if not query or query in "all configs" or query in "__all__":
+            choices.append(Choice(name="All configs", value="__all__"))
+
         for cfg in configs:
             label = self._config_label(cfg)
-            choices.append(Choice(name=label, value=str(cfg["_id"])))
+            value = str(cfg["_id"])
+            if query and query not in label.lower() and query not in value.lower():
+                continue
+            choices.append(Choice(name=label, value=value))
+            if len(choices) >= 11:
+                break
         return choices
 
     @check_auction.before_loop
