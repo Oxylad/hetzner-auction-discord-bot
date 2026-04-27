@@ -400,7 +400,7 @@ class Hetzner(commands.Cog, name="hetzner"):
         ).to_list(length=None)
         choices = []
 
-        if not query or query in "all configs" or query in "__all__":
+        if not query or query in {"all", "all configs", "__all__"}:
             choices.append(Choice(name="All configs", value="__all__"))
 
         for cfg in configs:
